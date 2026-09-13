@@ -1,10 +1,7 @@
-name: Build Nuvio SolYan tvOS Xcode26
+name: Build Nuvio SolYan tvOS Details Fix
 
 "on":
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 jobs:
   build:
@@ -12,106 +9,81 @@ jobs:
     timeout-minutes: 60
 
     steps:
+      - name: Checkout SolYan patch repo
+        uses: actions/checkout@v4
+
       - name: Check Xcode
         shell: bash
         run: |
           echo "macOS:"
           sw_vers
+
           echo ""
           echo "Xcode:"
           xcodebuild -version
+
           echo ""
           echo "tvOS SDK:"
           xcodebuild -showsdks | grep -i tvos || true
 
-      - name: Clone NuvioTVOS upstream
+      - name: Clone clean NuvioTVOS upstream
         shell: bash
         run: |
           git clone --recursive https://github.com/bobsupra/NuvioTVOS.git NuvioTVOS
+
           cd NuvioTVOS
-          echo "Nuvio commit:"
+
+          echo "Upstream commit:"
           git rev-parse HEAD
 
-      - name: Apply SolYan pagination fix
+          echo ""
+          echo "Working tree before patch:"
+          git status --short
+
+      - name: Apply ONLY DetailsScreen fix
         shell: bash
         run: |
-          python3 <<'PY'
-          from pathlib import Path
-          import re
+          SOURCE="$GITHUB_WORKSPACE/DetailsScreen.swift"
+          TARGET="$GITHUB_WORKSPACE/NuvioTVOS/tvosApp/NuvioTV/Sources/UI/Details/DetailsScreen.swift"
 
-          p = Path(
-              "NuvioTVOS/tvosApp/NuvioTV/Sources/UI/Home/TVCatalogRow.swift"
-          )
+          if [ ! -f "$SOURCE" ]; then
+            echo "ERROR: DetailsScreen.swift not found in repo root"
+            exit 1
+          fi
 
-          if not p.exists():
-              raise SystemExit(
-                  "ERROR: TVCatalogRow.swift not found"
-              )
+          if [ ! -f "$TARGET" ]; then
+            echo "ERROR: Upstream DetailsScreen.swift not found"
+            exit 1
+          fi
 
-          s = p.read_text(encoding="utf-8")
+          cp "$SOURCE" "$TARGET"
 
-          if "SolYan tvOS pagination fallback" in s:
-              print("SUCCESS: Fix already present")
-              raise SystemExit(0)
+          echo ""
+          echo "Only modified source file should be DetailsScreen.swift:"
+          cd "$GITHUB_WORKSPACE/NuvioTVOS"
+          git status --short
 
-          pattern = re.compile(
-              r'(?P<block>'
-              r'\.disabled\s*\(\s*'
-              r'restrictFocusToCardKey\s*!=\s*nil\s*&&\s*'
-              r'restrictFocusToCardKey\s*!=\s*cardKey\s*'
-              r'\)'
-              r')'
-          )
+          CHANGED="$(git status --short | wc -l | tr -d ' ')"
 
-          matches = list(pattern.finditer(s))
+          if [ "$CHANGED" != "1" ]; then
+            echo "ERROR: More than one upstream file was modified"
+            git status --short
+            exit 1
+          fi
 
-          if not matches:
-              print("Diagnostic:")
-              for i, line in enumerate(s.splitlines(), 1):
-                  if (
-                      ".disabled" in line
-                      or "restrictFocusToCardKey" in line
-                  ):
-                      print(f"{i}: {line}")
+          if ! git status --short | grep -q "tvosApp/NuvioTV/Sources/UI/Details/DetailsScreen.swift"; then
+            echo "ERROR: Unexpected modified file"
+            git status --short
+            exit 1
+          fi
 
-              raise SystemExit(
-                  "ERROR: Pagination insertion point not found"
-              )
-
-          m = matches[0]
-
-          line_start = s.rfind("\n", 0, m.start()) + 1
-          indent = s[line_start:m.start()]
-
-          insertion = (
-              "\n"
-              f"{indent}.onAppear {{\n"
-              f"{indent}    // SolYan tvOS pagination fallback\n"
-              f"{indent}    if itemIndex >= max(items.count - 3, 0) {{\n"
-              f"{indent}        onApproachEnd(item)\n"
-              f"{indent}    }}\n"
-              f"{indent}}}"
-          )
-
-          s = s[:m.end()] + insertion + s[m.end():]
-
-          p.write_text(s, encoding="utf-8")
-
-          verify = p.read_text(encoding="utf-8")
-
-          if "SolYan tvOS pagination fallback" not in verify:
-              raise SystemExit(
-                  "ERROR: Pagination patch verification failed"
-              )
-
-          print("SUCCESS: SolYan pagination fix applied")
-          PY
+          echo ""
+          echo "SUCCESS: Only DetailsScreen.swift was modified"
 
       - name: Install Tuist
         shell: bash
         run: |
           if command -v tuist >/dev/null 2>&1; then
-            echo "Tuist already installed:"
             tuist version
           else
             brew install tuist
@@ -122,16 +94,12 @@ jobs:
         shell: bash
         working-directory: NuvioTVOS
         run: |
-          echo "Building with:"
-          xcodebuild -version
-
           chmod +x scripts/build-ipa.sh
           bash scripts/build-ipa.sh
 
       - name: Find IPA
         shell: bash
         run: |
-          echo "Generated IPA:"
           find NuvioTVOS/build-ipa \
             -type f \
             -name "*.ipa" \
@@ -140,7 +108,7 @@ jobs:
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Nuvio-SolYan-tvOS-Xcode26
+          name: Nuvio-SolYan-tvOS-DetailsFix
           path: NuvioTVOS/build-ipa/*.ipa
           if-no-files-found: error
           retention-days: 30
