@@ -1,4 +1,4 @@
-name: Build Nuvio SolYan tvOS Details Fix
+name: Build Nuvio SolYan tvOS Details Fix 2
 
 "on":
   workflow_dispatch:
