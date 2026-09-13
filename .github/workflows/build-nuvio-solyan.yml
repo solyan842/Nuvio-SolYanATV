@@ -1,7 +1,10 @@
-name: Build Nuvio SolYan tvOS Details Fix 2
+name: Build Nuvio SolYan tvOS Details Fix
 
-"on":
+on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
   build:
@@ -9,7 +12,7 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - name: Checkout SolYan patch repo
+      - name: Checkout SolYan repo
         uses: actions/checkout@v4
 
       - name: Check Xcode
@@ -26,10 +29,23 @@ jobs:
           echo "tvOS SDK:"
           xcodebuild -showsdks | grep -i tvos || true
 
+      - name: Save SolYan DetailsScreen patch
+        shell: bash
+        run: |
+          cp \
+            tvosApp/NuvioTV/Sources/UI/Details/DetailsScreen.swift \
+            "$RUNNER_TEMP/DetailsScreen.swift"
+
+          test -f "$RUNNER_TEMP/DetailsScreen.swift"
+
+          echo "SUCCESS: SolYan DetailsScreen saved"
+
       - name: Clone clean NuvioTVOS upstream
         shell: bash
         run: |
-          git clone --recursive https://github.com/bobsupra/NuvioTVOS.git NuvioTVOS
+          git clone --recursive \
+            https://github.com/bobsupra/NuvioTVOS.git \
+            NuvioTVOS
 
           cd NuvioTVOS
 
@@ -37,48 +53,44 @@ jobs:
           git rev-parse HEAD
 
           echo ""
-          echo "Working tree before patch:"
+          echo "Clean upstream status:"
           git status --short
 
       - name: Apply ONLY DetailsScreen fix
         shell: bash
         run: |
-          SOURCE="$GITHUB_WORKSPACE/DetailsScreen.swift"
           TARGET="$GITHUB_WORKSPACE/NuvioTVOS/tvosApp/NuvioTV/Sources/UI/Details/DetailsScreen.swift"
 
-          if [ ! -f "$SOURCE" ]; then
-            echo "ERROR: DetailsScreen.swift not found in repo root"
-            exit 1
-          fi
-
-          if [ ! -f "$TARGET" ]; then
+          test -f "$TARGET" || {
             echo "ERROR: Upstream DetailsScreen.swift not found"
             exit 1
-          fi
+          }
 
-          cp "$SOURCE" "$TARGET"
+          cp \
+            "$RUNNER_TEMP/DetailsScreen.swift" \
+            "$TARGET"
+
+          cd "$GITHUB_WORKSPACE/NuvioTVOS"
 
           echo ""
-          echo "Only modified source file should be DetailsScreen.swift:"
-          cd "$GITHUB_WORKSPACE/NuvioTVOS"
+          echo "Modified upstream files:"
           git status --short
 
-          CHANGED="$(git status --short | wc -l | tr -d ' ')"
+          COUNT="$(git status --short | wc -l | tr -d ' ')"
 
-          if [ "$CHANGED" != "1" ]; then
-            echo "ERROR: More than one upstream file was modified"
-            git status --short
+          if [ "$COUNT" != "1" ]; then
+            echo "ERROR: Expected exactly one modified source file"
             exit 1
           fi
 
-          if ! git status --short | grep -q "tvosApp/NuvioTV/Sources/UI/Details/DetailsScreen.swift"; then
-            echo "ERROR: Unexpected modified file"
-            git status --short
-            exit 1
-          fi
+          git status --short | \
+            grep -q "tvosApp/NuvioTV/Sources/UI/Details/DetailsScreen.swift" || {
+              echo "ERROR: Unexpected modified file"
+              exit 1
+            }
 
           echo ""
-          echo "SUCCESS: Only DetailsScreen.swift was modified"
+          echo "SUCCESS: Only DetailsScreen.swift modified"
 
       - name: Install Tuist
         shell: bash
@@ -100,6 +112,7 @@ jobs:
       - name: Find IPA
         shell: bash
         run: |
+          echo "Generated IPA:"
           find NuvioTVOS/build-ipa \
             -type f \
             -name "*.ipa" \
