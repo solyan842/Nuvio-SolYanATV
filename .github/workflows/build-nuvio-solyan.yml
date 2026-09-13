@@ -1,4 +1,4 @@
-name: Build Nuvio SolYan tvOS v2
+name: Build Nuvio SolYan tvOS v3
 
 "on":
   workflow_dispatch:
@@ -13,49 +13,129 @@ jobs:
 
     steps:
       - name: Clone NuvioTVOS upstream
+        shell: bash
         run: |
           git clone --recursive https://github.com/bobsupra/NuvioTVOS.git NuvioTVOS
+          cd NuvioTVOS
+          echo "Upstream commit:"
+          git rev-parse HEAD
 
       - name: Apply SolYan pagination fix
         shell: bash
         run: |
           python3 <<'PY'
           from pathlib import Path
+          import re
 
-          p = Path("NuvioTVOS/tvosApp/NuvioTV/Sources/UI/Home/TVCatalogRow.swift")
-          s = p.read_text()
+          p = Path(
+              "NuvioTVOS/tvosApp/NuvioTV/Sources/UI/Home/TVCatalogRow.swift"
+          )
 
-          marker = """                    .disabled(
-                        restrictFocusToCardKey != nil && restrictFocusToCardKey != cardKey
-                    )"""
+          if not p.exists():
+              raise SystemExit(
+                  f"ERROR: Source file not found: {p}"
+              )
 
-          addition = marker + """
-                    // SolYan fix: second pagination trigger for tvOS
-                    .onAppear {
-                        if itemIndex >= max(items.count - 3, 0) {
-                            onApproachEnd(item)
-                        }
-                    }"""
+          s = p.read_text(encoding="utf-8")
 
-          if "SolYan fix: second pagination trigger for tvOS" in s:
-              print("Patch already present")
-          elif marker in s:
-              p.write_text(s.replace(marker, addition, 1))
-              print("SolYan pagination patch applied")
-          else:
-              raise SystemExit("ERROR: Patch anchor not found")
+          if "SolYan tvOS pagination fallback" in s:
+              print("SUCCESS: Pagination fix already present.")
+              raise SystemExit(0)
+
+          # Find the PosterCard section followed by its .disabled modifier.
+          # This deliberately ignores indentation/spacing so small upstream
+          # formatting changes do not break the patch.
+          pattern = re.compile(
+              r'(?P<block>'
+              r'\.disabled\s*\(\s*'
+              r'restrictFocusToCardKey\s*!=\s*nil\s*&&\s*'
+              r'restrictFocusToCardKey\s*!=\s*cardKey\s*'
+              r'\)'
+              r')'
+          )
+
+          matches = list(pattern.finditer(s))
+
+          if not matches:
+              print("----- Diagnostic: disabled modifiers -----")
+              for i, line in enumerate(s.splitlines(), 1):
+                  if ".disabled" in line or "restrictFocusToCardKey" in line:
+                      print(f"{i}: {line}")
+              raise SystemExit(
+                  "ERROR: Could not locate TVCatalogRow focus modifier."
+              )
+
+          # Use the first matching modifier in TVCatalogRow.
+          m = matches[0]
+
+          line_start = s.rfind("\n", 0, m.start()) + 1
+          indent = s[line_start:m.start()]
+
+          insertion = (
+              "\n"
+              f"{indent}.onAppear {{\n"
+              f"{indent}    // SolYan tvOS pagination fallback\n"
+              f"{indent}    if itemIndex >= max(items.count - 3, 0) {{\n"
+              f"{indent}        onApproachEnd(item)\n"
+              f"{indent}    }}\n"
+              f"{indent}}}"
+          )
+
+          s = s[:m.end()] + insertion + s[m.end():]
+          p.write_text(s, encoding="utf-8")
+
+          verify = p.read_text(encoding="utf-8")
+
+          if "SolYan tvOS pagination fallback" not in verify:
+              raise SystemExit("ERROR: Patch verification failed.")
+
+          print("SUCCESS: SolYan pagination fix applied.")
+          print()
+          print("----- Patched section -----")
+
+          lines = verify.splitlines()
+
+          for i, line in enumerate(lines):
+              if "SolYan tvOS pagination fallback" in line:
+                  start = max(0, i - 7)
+                  end = min(len(lines), i + 8)
+
+                  for n in range(start, end):
+                      print(f"{n + 1}: {lines[n]}")
+                  break
           PY
 
       - name: Install Tuist
-        run: brew install tuist
+        shell: bash
+        run: |
+          brew update
+          brew install tuist || brew upgrade tuist
+          tuist version
 
       - name: Build unsigned tvOS IPA
+        shell: bash
         working-directory: NuvioTVOS
-        run: bash scripts/build-ipa.sh
+        run: |
+          chmod +x scripts/build-ipa.sh
+          bash scripts/build-ipa.sh
+
+      - name: Show generated IPA
+        if: success()
+        shell: bash
+        run: |
+          echo "Generated files:"
+          find NuvioTVOS/build-ipa \
+            -maxdepth 1 \
+            -type f \
+            -name "*.ipa" \
+            -print \
+            -exec ls -lh {} \;
 
       - name: Upload IPA
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: Nuvio-SolYan-tvOS-unsigned
+          name: Nuvio-SolYan-tvOS
           path: NuvioTVOS/build-ipa/*.ipa
           if-no-files-found: error
+          retention-days: 30
