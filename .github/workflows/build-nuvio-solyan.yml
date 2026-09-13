@@ -1,4 +1,4 @@
-name: Build Nuvio SolYan tvOS v3
+name: Build Nuvio SolYan tvOS Xcode26
 
 "on":
   workflow_dispatch:
@@ -8,16 +8,28 @@ name: Build Nuvio SolYan tvOS v3
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
 
     steps:
+      - name: Check Xcode
+        shell: bash
+        run: |
+          echo "macOS:"
+          sw_vers
+          echo ""
+          echo "Xcode:"
+          xcodebuild -version
+          echo ""
+          echo "tvOS SDK:"
+          xcodebuild -showsdks | grep -i tvos || true
+
       - name: Clone NuvioTVOS upstream
         shell: bash
         run: |
           git clone --recursive https://github.com/bobsupra/NuvioTVOS.git NuvioTVOS
           cd NuvioTVOS
-          echo "Upstream commit:"
+          echo "Nuvio commit:"
           git rev-parse HEAD
 
       - name: Apply SolYan pagination fix
@@ -33,18 +45,15 @@ jobs:
 
           if not p.exists():
               raise SystemExit(
-                  f"ERROR: Source file not found: {p}"
+                  "ERROR: TVCatalogRow.swift not found"
               )
 
           s = p.read_text(encoding="utf-8")
 
           if "SolYan tvOS pagination fallback" in s:
-              print("SUCCESS: Pagination fix already present.")
+              print("SUCCESS: Fix already present")
               raise SystemExit(0)
 
-          # Find the PosterCard section followed by its .disabled modifier.
-          # This deliberately ignores indentation/spacing so small upstream
-          # formatting changes do not break the patch.
           pattern = re.compile(
               r'(?P<block>'
               r'\.disabled\s*\(\s*'
@@ -57,15 +66,18 @@ jobs:
           matches = list(pattern.finditer(s))
 
           if not matches:
-              print("----- Diagnostic: disabled modifiers -----")
+              print("Diagnostic:")
               for i, line in enumerate(s.splitlines(), 1):
-                  if ".disabled" in line or "restrictFocusToCardKey" in line:
+                  if (
+                      ".disabled" in line
+                      or "restrictFocusToCardKey" in line
+                  ):
                       print(f"{i}: {line}")
+
               raise SystemExit(
-                  "ERROR: Could not locate TVCatalogRow focus modifier."
+                  "ERROR: Pagination insertion point not found"
               )
 
-          # Use the first matching modifier in TVCatalogRow.
           m = matches[0]
 
           line_start = s.rfind("\n", 0, m.start()) + 1
@@ -82,60 +94,53 @@ jobs:
           )
 
           s = s[:m.end()] + insertion + s[m.end():]
+
           p.write_text(s, encoding="utf-8")
 
           verify = p.read_text(encoding="utf-8")
 
           if "SolYan tvOS pagination fallback" not in verify:
-              raise SystemExit("ERROR: Patch verification failed.")
+              raise SystemExit(
+                  "ERROR: Pagination patch verification failed"
+              )
 
-          print("SUCCESS: SolYan pagination fix applied.")
-          print()
-          print("----- Patched section -----")
-
-          lines = verify.splitlines()
-
-          for i, line in enumerate(lines):
-              if "SolYan tvOS pagination fallback" in line:
-                  start = max(0, i - 7)
-                  end = min(len(lines), i + 8)
-
-                  for n in range(start, end):
-                      print(f"{n + 1}: {lines[n]}")
-                  break
+          print("SUCCESS: SolYan pagination fix applied")
           PY
 
       - name: Install Tuist
         shell: bash
         run: |
-          brew update
-          brew install tuist || brew upgrade tuist
-          tuist version
+          if command -v tuist >/dev/null 2>&1; then
+            echo "Tuist already installed:"
+            tuist version
+          else
+            brew install tuist
+            tuist version
+          fi
 
       - name: Build unsigned tvOS IPA
         shell: bash
         working-directory: NuvioTVOS
         run: |
+          echo "Building with:"
+          xcodebuild -version
+
           chmod +x scripts/build-ipa.sh
           bash scripts/build-ipa.sh
 
-      - name: Show generated IPA
-        if: success()
+      - name: Find IPA
         shell: bash
         run: |
-          echo "Generated files:"
+          echo "Generated IPA:"
           find NuvioTVOS/build-ipa \
-            -maxdepth 1 \
             -type f \
             -name "*.ipa" \
-            -print \
-            -exec ls -lh {} \;
+            -print
 
       - name: Upload IPA
-        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: Nuvio-SolYan-tvOS
+          name: Nuvio-SolYan-tvOS-Xcode26
           path: NuvioTVOS/build-ipa/*.ipa
           if-no-files-found: error
           retention-days: 30
