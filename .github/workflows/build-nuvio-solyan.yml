@@ -1,7 +1,10 @@
 name: Build Nuvio SolYan tvOS
 
-on:
+"on":
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
   build:
@@ -10,41 +13,37 @@ jobs:
 
     steps:
       - name: Clone NuvioTVOS upstream
-        run: git clone --recursive https://github.com/bobsupra/NuvioTVOS.git NuvioTVOS
+        run: |
+          git clone --recursive https://github.com/bobsupra/NuvioTVOS.git NuvioTVOS
 
-      - name: Apply SolYan tvOS catalog pagination fix
+      - name: Apply SolYan pagination fix
         shell: bash
         run: |
-          python3 - <<'PY'
+          python3 <<'PY'
           from pathlib import Path
 
-          p = Path('NuvioTVOS/tvosApp/NuvioTV/Sources/UI/Home/TVCatalogRow.swift')
+          p = Path("NuvioTVOS/tvosApp/NuvioTV/Sources/UI/Home/TVCatalogRow.swift")
           s = p.read_text()
 
-          marker = '''                    .disabled(
+          marker = """                    .disabled(
                         restrictFocusToCardKey != nil && restrictFocusToCardKey != cardKey
-                    )'''
+                    )"""
 
-          addition = marker + '''
+          addition = marker + """
                     // SolYan fix: second pagination trigger for tvOS
                     .onAppear {
                         if itemIndex >= max(items.count - 3, 0) {
                             onApproachEnd(item)
                         }
-                    }'''
+                    }"""
 
-          if 'SolYan fix: second pagination trigger for tvOS' in s:
-              print('Patch already present.')
-
-          elif marker not in s:
-              raise SystemExit(
-                  'Patch anchor not found; upstream TVCatalogRow.swift changed.'
-              )
-
+          if "SolYan fix: second pagination trigger for tvOS" in s:
+              print("Patch already present")
+          elif marker in s:
+              p.write_text(s.replace(marker, addition, 1))
+              print("SolYan pagination patch applied")
           else:
-              s = s.replace(marker, addition, 1)
-              p.write_text(s)
-              print('SolYan pagination patch applied successfully.')
+              raise SystemExit("ERROR: Patch anchor not found")
           PY
 
       - name: Install Tuist
