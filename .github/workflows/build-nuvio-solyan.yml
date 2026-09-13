@@ -1,0 +1,62 @@
+name: Build Nuvio SolYan tvOS
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    steps:
+      - name: Clone NuvioTVOS upstream
+        run: git clone --recursive https://github.com/bobsupra/NuvioTVOS.git NuvioTVOS
+
+      - name: Apply SolYan tvOS catalog pagination fix
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('NuvioTVOS/tvosApp/NuvioTV/Sources/UI/Home/TVCatalogRow.swift')
+          s = p.read_text()
+
+          marker = '''                    .disabled(
+                        restrictFocusToCardKey != nil && restrictFocusToCardKey != cardKey
+                    )'''
+
+          addition = marker + '''
+                    // SolYan fix: second pagination trigger for tvOS
+                    .onAppear {
+                        if itemIndex >= max(items.count - 3, 0) {
+                            onApproachEnd(item)
+                        }
+                    }'''
+
+          if 'SolYan fix: second pagination trigger for tvOS' in s:
+              print('Patch already present.')
+
+          elif marker not in s:
+              raise SystemExit(
+                  'Patch anchor not found; upstream TVCatalogRow.swift changed.'
+              )
+
+          else:
+              s = s.replace(marker, addition, 1)
+              p.write_text(s)
+              print('SolYan pagination patch applied successfully.')
+          PY
+
+      - name: Install Tuist
+        run: brew install tuist
+
+      - name: Build unsigned tvOS IPA
+        working-directory: NuvioTVOS
+        run: bash scripts/build-ipa.sh
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nuvio-SolYan-tvOS-unsigned
+          path: NuvioTVOS/build-ipa/*.ipa
+          if-no-files-found: error
