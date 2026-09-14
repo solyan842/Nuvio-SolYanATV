@@ -1,4 +1,4 @@
-name: Build Nuvio SolYan tvOS Details Fix
+name: Build Nuvio SolYan tvOS Horizontal Episodes
 
 on:
   workflow_dispatch:
@@ -56,7 +56,7 @@ jobs:
           echo "Clean upstream status:"
           git status --short
 
-      - name: Apply ONLY DetailsScreen fix
+      - name: Apply SolYan fixes and restore horizontal episode rail
         shell: bash
         run: |
           TARGET="$GITHUB_WORKSPACE/NuvioTVOS/tvosApp/NuvioTV/Sources/UI/Details/DetailsScreen.swift"
@@ -69,6 +69,149 @@ jobs:
           cp \
             "$RUNNER_TEMP/DetailsScreen.swift" \
             "$TARGET"
+
+          export TARGET
+          python3 <<'PY'
+          import os
+          from pathlib import Path
+
+          target = Path(os.environ["TARGET"])
+          text = target.read_text()
+
+          old = '''    private var episodeCardStrip: some View {
+              // SolYan tvOS fix: use a native vertical episode list instead of the
+              // custom horizontally-offset rail. This lets the parent vertical
+              // Details ScrollView and the tvOS focus engine move naturally through
+              // the episode cards and continue to the sections below them.
+              LazyVStack(alignment: .leading, spacing: TvEpisodeCardLayout.spacing) {
+                  ForEach(seasonEpisodes) { video in
+                      let itemIndex = seasonEpisodes.firstIndex(where: { $0.id == video.id }) ?? 0
+                      TvEpisodeCard(
+                          video: video,
+                          fallbackRating: seriesRating,
+                          continueProgress: continueProgress(for: video),
+                          isWatched: watchedEpisodeKeys.contains("\\(video.season):\\(video.episode)"),
+                          isSeasonWatched: isSeasonWatched,
+                          onFocus: {
+                              episodeScrollIndex = itemIndex
+                              onFocus()
+                          },
+                          onToggleWatched: {
+                              _ = WatchedStore.toggleEpisode(
+                                  meta: meta,
+                                  season: video.season,
+                                  episode: video.episode
+                              )
+                          },
+                          onToggleSeasonWatched: {
+                              WatchedStore.setSeasonWatched(
+                                  meta: meta,
+                                  season: selectedSeason,
+                                  episodes: seasonEpisodes.map(\\.episode),
+                                  isWatched: !isSeasonWatched
+                              )
+                          },
+                          onMenuOpened: { onEpisodeMenuPresented(true) },
+                          onMenuClosed: { onEpisodeMenuPresented(false) },
+                          action: { onSelect(video) },
+                          onPlayManually: onPlayManually != nil ? { onPlayManually?(video) } : nil,
+                          smartStreamSelection: smartStreamSelection,
+                          focus: episodeFocus,
+                          restrictFocusToKey: effectiveFocusRestriction,
+                          onMoveDown: {
+                              if itemIndex + 1 < seasonEpisodes.count {
+                                  episodeFocus.wrappedValue = TvEpisodeFocus.card(seasonEpisodes[itemIndex + 1].id)
+                              } else {
+                                  onMoveDownFromEpisode()
+                              }
+                          },
+                          onMoveUp: {
+                              if itemIndex > 0 {
+                                  episodeFocus.wrappedValue = TvEpisodeFocus.card(seasonEpisodes[itemIndex - 1].id)
+                              } else {
+                                  onMoveUpFromSeason()
+                              }
+                          }
+                      )
+                  }
+              }
+              .padding(.vertical, TvEpisodeCardLayout.verticalPadding)
+          }'''.replace('          ', '      ')
+
+          new = '''    private var episodeCardStrip: some View {
+              GeometryReader { geo in
+                  let edgeInset = max(0, geo.frame(in: .global).minX)
+                  let stripWidth = geo.size.width + edgeInset * 2
+                  let visibleCardCount = max(1, Int(ceil(stripWidth / TvEpisodeCardLayout.step)) + 1)
+                  let materializedIndices = materializedEpisodeIndices(visibleCardCount: visibleCardCount)
+                  let materializedEpisodes = materializedIndices.map { seasonEpisodes[$0] }
+
+                  HStack(alignment: .bottom, spacing: TvEpisodeCardLayout.spacing) {
+                      ForEach(materializedEpisodes) { video in
+                          let itemIndex = seasonEpisodes.firstIndex(where: { $0.id == video.id }) ?? 0
+                          TvEpisodeCard(
+                              video: video,
+                              fallbackRating: seriesRating,
+                              continueProgress: continueProgress(for: video),
+                              isWatched: watchedEpisodeKeys.contains("\\(video.season):\\(video.episode)"),
+                              isSeasonWatched: isSeasonWatched,
+                              onFocus: {
+                                  episodeScrollIndex = itemIndex
+                                  onFocus()
+                              },
+                              onToggleWatched: {
+                                  _ = WatchedStore.toggleEpisode(
+                                      meta: meta,
+                                      season: video.season,
+                                      episode: video.episode
+                                  )
+                              },
+                              onToggleSeasonWatched: {
+                                  WatchedStore.setSeasonWatched(
+                                      meta: meta,
+                                      season: selectedSeason,
+                                      episodes: seasonEpisodes.map(\\.episode),
+                                      isWatched: !isSeasonWatched
+                                  )
+                              },
+                              onMenuOpened: { onEpisodeMenuPresented(true) },
+                              onMenuClosed: { onEpisodeMenuPresented(false) },
+                              action: { onSelect(video) },
+                              onPlayManually: onPlayManually != nil ? { onPlayManually?(video) } : nil,
+                              smartStreamSelection: smartStreamSelection,
+                              focus: episodeFocus,
+                              restrictFocusToKey: effectiveFocusRestriction,
+                              onMoveDown: onMoveDownFromEpisode,
+                              onMoveUp: seasons.count <= 1 ? onMoveUpFromSeason : nil
+                          )
+                      }
+                  }
+                  .padding(.leading, CGFloat(materializedIndices.first ?? 0) * TvEpisodeCardLayout.step)
+                  .padding(.vertical, TvEpisodeCardLayout.verticalPadding)
+                  .offset(x: edgeInset - CGFloat(episodeScrollIndex) * TvEpisodeCardLayout.step)
+                  .frame(width: stripWidth, height: TvEpisodeCardLayout.stripHeight, alignment: .leading)
+                  .offset(x: -edgeInset)
+                  .animation(smoothFocus ? .spring(response: 0.3, dampingFraction: 1.0) : nil, value: episodeScrollIndex)
+              }
+              .frame(height: TvEpisodeCardLayout.stripHeight)
+          }'''.replace('          ', '      ')
+
+          if old not in text:
+              raise SystemExit("ERROR: vertical episode rail block was not found; refusing an unsafe build")
+
+          text = text.replace(old, new, 1)
+
+          if "LazyVStack(alignment: .leading, spacing: TvEpisodeCardLayout.spacing)" in text:
+              raise SystemExit("ERROR: vertical episode rail still present")
+          if "GeometryReader { geo in" not in text or "episodeScrollIndex) * TvEpisodeCardLayout.step" not in text:
+              raise SystemExit("ERROR: horizontal episode rail verification failed")
+          if ".allowsHitTesting(false)" not in text or ".accessibilityHidden(true)" not in text:
+              raise SystemExit("ERROR: backdrop focus isolation fix is missing")
+
+          target.write_text(text)
+          print("SUCCESS: horizontal episode rail restored")
+          print("SUCCESS: backdrop remains excluded from hit testing/focus")
+          PY
 
           cd "$GITHUB_WORKSPACE/NuvioTVOS"
 
@@ -90,7 +233,7 @@ jobs:
             }
 
           echo ""
-          echo "SUCCESS: Only DetailsScreen.swift modified"
+          echo "SUCCESS: only DetailsScreen.swift modified in upstream checkout"
 
       - name: Install Tuist
         shell: bash
@@ -121,7 +264,7 @@ jobs:
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Nuvio-SolYan-tvOS-DetailsFix
+          name: Nuvio-SolYan-tvOS-HorizontalEpisodes
           path: NuvioTVOS/build-ipa/*.ipa
           if-no-files-found: error
           retention-days: 30
