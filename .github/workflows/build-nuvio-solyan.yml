@@ -1,4 +1,4 @@
-name: Build Nuvio SolYan tvOS Horizontal Episodes
+name: Build Nuvio SolYan tvOS No Backdrop
 
 on:
   workflow_dispatch:
@@ -20,11 +20,9 @@ jobs:
         run: |
           echo "macOS:"
           sw_vers
-
           echo ""
           echo "Xcode:"
           xcodebuild -version
-
           echo ""
           echo "tvOS SDK:"
           xcodebuild -showsdks | grep -i tvos || true
@@ -35,7 +33,6 @@ jobs:
           cp \
             tvosApp/NuvioTV/Sources/UI/Details/DetailsScreen.swift \
             "$RUNNER_TEMP/SolYanDetailsScreen.swift"
-
           test -f "$RUNNER_TEMP/SolYanDetailsScreen.swift"
           echo "SUCCESS: SolYan DetailsScreen saved"
 
@@ -45,7 +42,6 @@ jobs:
           git clone --recursive \
             https://github.com/bobsupra/NuvioTVOS.git \
             NuvioTVOS
-
           cd NuvioTVOS
           echo "Upstream commit:"
           git rev-parse HEAD
@@ -53,7 +49,7 @@ jobs:
           echo "Clean upstream status:"
           git status --short
 
-      - name: Apply SolYan fixes with upstream horizontal episode rail
+      - name: Apply horizontal episode rail and remove backdrop rendering
         shell: bash
         run: |
           TARGET="$GITHUB_WORKSPACE/NuvioTVOS/tvosApp/NuvioTV/Sources/UI/Details/DetailsScreen.swift"
@@ -64,19 +60,17 @@ jobs:
             exit 1
           }
 
-          # Preserve the exact horizontal episode implementation from the
-          # upstream checkout before applying the SolYan DetailsScreen.
           cp "$TARGET" "$UPSTREAM"
           cp "$RUNNER_TEMP/SolYanDetailsScreen.swift" "$TARGET"
 
           export TARGET UPSTREAM
           python3 <<'PY'
           import os
+          import re
           from pathlib import Path
 
           target = Path(os.environ["TARGET"])
           upstream_path = Path(os.environ["UPSTREAM"])
-
           solyan = target.read_text()
           upstream = upstream_path.read_text()
 
@@ -96,13 +90,12 @@ jobs:
 
           solyan_start, solyan_end = block_bounds(solyan, "SolYan")
           upstream_start, upstream_end = block_bounds(upstream, "upstream")
-
           upstream_episode_block = upstream[upstream_start:upstream_end]
 
           if "GeometryReader { geo in" not in upstream_episode_block:
-              raise SystemExit("ERROR: upstream episode rail is not the expected horizontal GeometryReader implementation")
+              raise SystemExit("ERROR: upstream episode rail is not horizontal GeometryReader implementation")
           if "HStack(alignment: .bottom" not in upstream_episode_block:
-              raise SystemExit("ERROR: upstream horizontal HStack episode rail not found")
+              raise SystemExit("ERROR: upstream horizontal episode HStack not found")
           if "episodeScrollIndex" not in upstream_episode_block:
               raise SystemExit("ERROR: upstream horizontal rail does not use episodeScrollIndex")
 
@@ -110,26 +103,48 @@ jobs:
 
           merged_start, merged_end = block_bounds(merged, "merged")
           merged_episode_block = merged[merged_start:merged_end]
-
           if "LazyVStack" in merged_episode_block:
-              raise SystemExit("ERROR: vertical episode rail is still present after merge")
+              raise SystemExit("ERROR: vertical episode rail is still present")
           if "GeometryReader { geo in" not in merged_episode_block:
               raise SystemExit("ERROR: horizontal episode rail verification failed")
 
-          # Keep the SolYan backdrop focus isolation fix. The backdrop remains
-          # visually present but cannot steal hit testing or accessibility focus.
-          if ".allowsHitTesting(false)" not in merged:
-              raise SystemExit("ERROR: backdrop .allowsHitTesting(false) fix is missing")
-          if ".accessibilityHidden(true)" not in merged:
-              raise SystemExit("ERROR: backdrop .accessibilityHidden(true) fix is missing")
+          # Remove the artwork backdrop from the main Details page.
+          merged, main_backdrop_removed = re.subn(
+              r'(?m)^[ \t]*TvDetailsBackdrop\(meta: meta, blurRadius: backdropBlurRadius\)[ \t]*\n',
+              '', merged
+          )
+
+          # Remove the artwork backdrop from the tvOS stream picker as well.
+          merged, picker_backdrop_removed = re.subn(
+              r'(?m)^[ \t]*TvDetailsBackdrop\(meta: meta\)[ \t]*\n',
+              '', merged
+          )
+
+          # The scrolled backdrop dimmer is no longer useful once artwork is gone.
+          merged, dimmer_removed = re.subn(
+              r'(?m)^[ \t]*TvDetailsScrolledBackdropDimmer\(isScrolledDown: isScrolledDown\)[ \t]*\n',
+              '', merged
+          )
+
+          if main_backdrop_removed != 1:
+              raise SystemExit(f"ERROR: expected 1 main Details backdrop call, removed {main_backdrop_removed}")
+          if picker_backdrop_removed != 1:
+              raise SystemExit(f"ERROR: expected 1 stream picker backdrop call, removed {picker_backdrop_removed}")
+          if dimmer_removed != 1:
+              raise SystemExit(f"ERROR: expected 1 backdrop dimmer call, removed {dimmer_removed}")
+          if re.search(r'TvDetailsBackdrop\(meta:\s*meta', merged):
+              raise SystemExit("ERROR: a rendered TvDetailsBackdrop call still remains")
+          if "TvDetailsScrolledBackdropDimmer(isScrolledDown: isScrolledDown)" in merged:
+              raise SystemExit("ERROR: backdrop dimmer still rendered")
 
           target.write_text(merged)
           print("SUCCESS: exact upstream horizontal episode rail restored")
-          print("SUCCESS: SolYan backdrop focus isolation retained")
+          print("SUCCESS: main Details artwork backdrop removed")
+          print("SUCCESS: stream picker artwork backdrop removed")
+          print("SUCCESS: backdrop dimmer removed")
           PY
 
           cd "$GITHUB_WORKSPACE/NuvioTVOS"
-
           echo ""
           echo "Modified upstream files:"
           git status --short
@@ -178,7 +193,7 @@ jobs:
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Nuvio-SolYan-tvOS-HorizontalEpisodes
+          name: Nuvio-SolYan-tvOS-NoBackdrop
           path: NuvioTVOS/build-ipa/*.ipa
           if-no-files-found: error
           retention-days: 30
