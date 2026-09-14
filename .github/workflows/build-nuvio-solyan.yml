@@ -29,15 +29,14 @@ jobs:
           echo "tvOS SDK:"
           xcodebuild -showsdks | grep -i tvos || true
 
-      - name: Save SolYan DetailsScreen patch
+      - name: Save SolYan DetailsScreen
         shell: bash
         run: |
           cp \
             tvosApp/NuvioTV/Sources/UI/Details/DetailsScreen.swift \
-            "$RUNNER_TEMP/DetailsScreen.swift"
+            "$RUNNER_TEMP/SolYanDetailsScreen.swift"
 
-          test -f "$RUNNER_TEMP/DetailsScreen.swift"
-
+          test -f "$RUNNER_TEMP/SolYanDetailsScreen.swift"
           echo "SUCCESS: SolYan DetailsScreen saved"
 
       - name: Clone clean NuvioTVOS upstream
@@ -48,169 +47,85 @@ jobs:
             NuvioTVOS
 
           cd NuvioTVOS
-
           echo "Upstream commit:"
           git rev-parse HEAD
-
           echo ""
           echo "Clean upstream status:"
           git status --short
 
-      - name: Apply SolYan fixes and restore horizontal episode rail
+      - name: Apply SolYan fixes with upstream horizontal episode rail
         shell: bash
         run: |
           TARGET="$GITHUB_WORKSPACE/NuvioTVOS/tvosApp/NuvioTV/Sources/UI/Details/DetailsScreen.swift"
+          UPSTREAM="$RUNNER_TEMP/UpstreamDetailsScreen.swift"
 
           test -f "$TARGET" || {
             echo "ERROR: Upstream DetailsScreen.swift not found"
             exit 1
           }
 
-          cp \
-            "$RUNNER_TEMP/DetailsScreen.swift" \
-            "$TARGET"
+          # Preserve the exact horizontal episode implementation from the
+          # upstream checkout before applying the SolYan DetailsScreen.
+          cp "$TARGET" "$UPSTREAM"
+          cp "$RUNNER_TEMP/SolYanDetailsScreen.swift" "$TARGET"
 
-          export TARGET
+          export TARGET UPSTREAM
           python3 <<'PY'
           import os
           from pathlib import Path
 
           target = Path(os.environ["TARGET"])
-          text = target.read_text()
+          upstream_path = Path(os.environ["UPSTREAM"])
 
-          old = '''    private var episodeCardStrip: some View {
-              // SolYan tvOS fix: use a native vertical episode list instead of the
-              // custom horizontally-offset rail. This lets the parent vertical
-              // Details ScrollView and the tvOS focus engine move naturally through
-              // the episode cards and continue to the sections below them.
-              LazyVStack(alignment: .leading, spacing: TvEpisodeCardLayout.spacing) {
-                  ForEach(seasonEpisodes) { video in
-                      let itemIndex = seasonEpisodes.firstIndex(where: { $0.id == video.id }) ?? 0
-                      TvEpisodeCard(
-                          video: video,
-                          fallbackRating: seriesRating,
-                          continueProgress: continueProgress(for: video),
-                          isWatched: watchedEpisodeKeys.contains("\\(video.season):\\(video.episode)"),
-                          isSeasonWatched: isSeasonWatched,
-                          onFocus: {
-                              episodeScrollIndex = itemIndex
-                              onFocus()
-                          },
-                          onToggleWatched: {
-                              _ = WatchedStore.toggleEpisode(
-                                  meta: meta,
-                                  season: video.season,
-                                  episode: video.episode
-                              )
-                          },
-                          onToggleSeasonWatched: {
-                              WatchedStore.setSeasonWatched(
-                                  meta: meta,
-                                  season: selectedSeason,
-                                  episodes: seasonEpisodes.map(\\.episode),
-                                  isWatched: !isSeasonWatched
-                              )
-                          },
-                          onMenuOpened: { onEpisodeMenuPresented(true) },
-                          onMenuClosed: { onEpisodeMenuPresented(false) },
-                          action: { onSelect(video) },
-                          onPlayManually: onPlayManually != nil ? { onPlayManually?(video) } : nil,
-                          smartStreamSelection: smartStreamSelection,
-                          focus: episodeFocus,
-                          restrictFocusToKey: effectiveFocusRestriction,
-                          onMoveDown: {
-                              if itemIndex + 1 < seasonEpisodes.count {
-                                  episodeFocus.wrappedValue = TvEpisodeFocus.card(seasonEpisodes[itemIndex + 1].id)
-                              } else {
-                                  onMoveDownFromEpisode()
-                              }
-                          },
-                          onMoveUp: {
-                              if itemIndex > 0 {
-                                  episodeFocus.wrappedValue = TvEpisodeFocus.card(seasonEpisodes[itemIndex - 1].id)
-                              } else {
-                                  onMoveUpFromSeason()
-                              }
-                          }
-                      )
-                  }
-              }
-              .padding(.vertical, TvEpisodeCardLayout.verticalPadding)
-          }'''.replace('          ', '      ')
+          solyan = target.read_text()
+          upstream = upstream_path.read_text()
 
-          new = '''    private var episodeCardStrip: some View {
-              GeometryReader { geo in
-                  let edgeInset = max(0, geo.frame(in: .global).minX)
-                  let stripWidth = geo.size.width + edgeInset * 2
-                  let visibleCardCount = max(1, Int(ceil(stripWidth / TvEpisodeCardLayout.step)) + 1)
-                  let materializedIndices = materializedEpisodeIndices(visibleCardCount: visibleCardCount)
-                  let materializedEpisodes = materializedIndices.map { seasonEpisodes[$0] }
+          start_marker = "    private var episodeCardStrip: some View {"
+          end_marker = "    @ViewBuilder\n    private var seasonSelector: some View {"
 
-                  HStack(alignment: .bottom, spacing: TvEpisodeCardLayout.spacing) {
-                      ForEach(materializedEpisodes) { video in
-                          let itemIndex = seasonEpisodes.firstIndex(where: { $0.id == video.id }) ?? 0
-                          TvEpisodeCard(
-                              video: video,
-                              fallbackRating: seriesRating,
-                              continueProgress: continueProgress(for: video),
-                              isWatched: watchedEpisodeKeys.contains("\\(video.season):\\(video.episode)"),
-                              isSeasonWatched: isSeasonWatched,
-                              onFocus: {
-                                  episodeScrollIndex = itemIndex
-                                  onFocus()
-                              },
-                              onToggleWatched: {
-                                  _ = WatchedStore.toggleEpisode(
-                                      meta: meta,
-                                      season: video.season,
-                                      episode: video.episode
-                                  )
-                              },
-                              onToggleSeasonWatched: {
-                                  WatchedStore.setSeasonWatched(
-                                      meta: meta,
-                                      season: selectedSeason,
-                                      episodes: seasonEpisodes.map(\\.episode),
-                                      isWatched: !isSeasonWatched
-                                  )
-                              },
-                              onMenuOpened: { onEpisodeMenuPresented(true) },
-                              onMenuClosed: { onEpisodeMenuPresented(false) },
-                              action: { onSelect(video) },
-                              onPlayManually: onPlayManually != nil ? { onPlayManually?(video) } : nil,
-                              smartStreamSelection: smartStreamSelection,
-                              focus: episodeFocus,
-                              restrictFocusToKey: effectiveFocusRestriction,
-                              onMoveDown: onMoveDownFromEpisode,
-                              onMoveUp: seasons.count <= 1 ? onMoveUpFromSeason : nil
-                          )
-                      }
-                  }
-                  .padding(.leading, CGFloat(materializedIndices.first ?? 0) * TvEpisodeCardLayout.step)
-                  .padding(.vertical, TvEpisodeCardLayout.verticalPadding)
-                  .offset(x: edgeInset - CGFloat(episodeScrollIndex) * TvEpisodeCardLayout.step)
-                  .frame(width: stripWidth, height: TvEpisodeCardLayout.stripHeight, alignment: .leading)
-                  .offset(x: -edgeInset)
-                  .animation(smoothFocus ? .spring(response: 0.3, dampingFraction: 1.0) : nil, value: episodeScrollIndex)
-              }
-              .frame(height: TvEpisodeCardLayout.stripHeight)
-          }'''.replace('          ', '      ')
+          def block_bounds(text, label):
+              start = text.find(start_marker)
+              if start < 0:
+                  raise SystemExit(f"ERROR: {label} episodeCardStrip start marker not found")
+              end = text.find(end_marker, start)
+              if end < 0:
+                  raise SystemExit(f"ERROR: {label} seasonSelector marker not found")
+              if text.find(start_marker, start + 1) >= 0:
+                  raise SystemExit(f"ERROR: {label} has multiple episodeCardStrip blocks")
+              return start, end
 
-          if old not in text:
-              raise SystemExit("ERROR: vertical episode rail block was not found; refusing an unsafe build")
+          solyan_start, solyan_end = block_bounds(solyan, "SolYan")
+          upstream_start, upstream_end = block_bounds(upstream, "upstream")
 
-          text = text.replace(old, new, 1)
+          upstream_episode_block = upstream[upstream_start:upstream_end]
 
-          if "LazyVStack(alignment: .leading, spacing: TvEpisodeCardLayout.spacing)" in text:
-              raise SystemExit("ERROR: vertical episode rail still present")
-          if "GeometryReader { geo in" not in text or "episodeScrollIndex) * TvEpisodeCardLayout.step" not in text:
+          if "GeometryReader { geo in" not in upstream_episode_block:
+              raise SystemExit("ERROR: upstream episode rail is not the expected horizontal GeometryReader implementation")
+          if "HStack(alignment: .bottom" not in upstream_episode_block:
+              raise SystemExit("ERROR: upstream horizontal HStack episode rail not found")
+          if "episodeScrollIndex" not in upstream_episode_block:
+              raise SystemExit("ERROR: upstream horizontal rail does not use episodeScrollIndex")
+
+          merged = solyan[:solyan_start] + upstream_episode_block + solyan[solyan_end:]
+
+          merged_start, merged_end = block_bounds(merged, "merged")
+          merged_episode_block = merged[merged_start:merged_end]
+
+          if "LazyVStack" in merged_episode_block:
+              raise SystemExit("ERROR: vertical episode rail is still present after merge")
+          if "GeometryReader { geo in" not in merged_episode_block:
               raise SystemExit("ERROR: horizontal episode rail verification failed")
-          if ".allowsHitTesting(false)" not in text or ".accessibilityHidden(true)" not in text:
-              raise SystemExit("ERROR: backdrop focus isolation fix is missing")
 
-          target.write_text(text)
-          print("SUCCESS: horizontal episode rail restored")
-          print("SUCCESS: backdrop remains excluded from hit testing/focus")
+          # Keep the SolYan backdrop focus isolation fix. The backdrop remains
+          # visually present but cannot steal hit testing or accessibility focus.
+          if ".allowsHitTesting(false)" not in merged:
+              raise SystemExit("ERROR: backdrop .allowsHitTesting(false) fix is missing")
+          if ".accessibilityHidden(true)" not in merged:
+              raise SystemExit("ERROR: backdrop .accessibilityHidden(true) fix is missing")
+
+          target.write_text(merged)
+          print("SUCCESS: exact upstream horizontal episode rail restored")
+          print("SUCCESS: SolYan backdrop focus isolation retained")
           PY
 
           cd "$GITHUB_WORKSPACE/NuvioTVOS"
@@ -220,7 +135,6 @@ jobs:
           git status --short
 
           COUNT="$(git status --short | wc -l | tr -d ' ')"
-
           if [ "$COUNT" != "1" ]; then
             echo "ERROR: Expected exactly one modified source file"
             exit 1
