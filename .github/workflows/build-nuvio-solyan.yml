@@ -108,19 +108,14 @@ jobs:
           if "GeometryReader { geo in" not in merged_episode_block:
               raise SystemExit("ERROR: horizontal episode rail verification failed")
 
-          # Remove the artwork backdrop from the main Details page.
           merged, main_backdrop_removed = re.subn(
               r'(?m)^[ \t]*TvDetailsBackdrop\(meta: meta, blurRadius: backdropBlurRadius\)[ \t]*\n',
               '', merged
           )
-
-          # Remove the artwork backdrop from the tvOS stream picker as well.
           merged, picker_backdrop_removed = re.subn(
               r'(?m)^[ \t]*TvDetailsBackdrop\(meta: meta\)[ \t]*\n',
               '', merged
           )
-
-          # The scrolled backdrop dimmer is no longer useful once artwork is gone.
           merged, dimmer_removed = re.subn(
               r'(?m)^[ \t]*TvDetailsScrolledBackdropDimmer\(isScrolledDown: isScrolledDown\)[ \t]*\n',
               '', merged
@@ -182,30 +177,30 @@ jobs:
           target = Path(os.environ["TARGET"])
           text = target.read_text()
 
-          old = '''                // Sidecar cues are in source PTS; host renders against engine.sourceTime (which folds playlistShiftSeconds).
-                self.subtitleCues = result.cues
-          '''
-          new = '''                // Runtime external sidecar files are authored on the item's 0-based timeline.
-                // The Aether overlay evaluates against sourceTime, which is on the source-PTS axis.
-                // Lift registered external sidecars onto that axis using the active playlist shift.
-                // Compatibility one-shot sidecars keep their historical behavior.
-                let sidecarAxisShift = externalTrackID != nil ? self.playlistShiftSeconds : 0
-                self.subtitleCues = result.cues.map { cue in
-                    SubtitleCue(
-                        id: cue.id,
-                        startTime: cue.startTime + sidecarAxisShift,
-                        endTime: cue.endTime + sidecarAxisShift,
-                        body: cue.body,
-                        placement: cue.placement
-                    )
-                }
-          '''
+          needle = "                self.subtitleCues = result.cues"
+          if text.count(needle) != 1:
+              raise SystemExit(f"ERROR: expected exactly one runtime sidecar publish line, found {text.count(needle)}")
 
-          count = text.count(old)
-          if count != 1:
-              raise SystemExit(f"ERROR: expected exactly one runtime sidecar publish site, found {count}")
+          replacement = "\n".join([
+              "                let sidecarAxisShift = externalTrackID != nil ? self.playlistShiftSeconds : 0",
+              "                self.subtitleCues = result.cues.map { cue in",
+              "                    SubtitleCue(",
+              "                        id: cue.id,",
+              "                        startTime: cue.startTime + sidecarAxisShift,",
+              "                        endTime: cue.endTime + sidecarAxisShift,",
+              "                        body: cue.body,",
+              "                        placement: cue.placement",
+              "                    )",
+              "                }",
+          ])
 
-          text = text.replace(old, new, 1)
+          old_comment = "                // Sidecar cues are in source PTS; host renders against engine.sourceTime (which folds playlistShiftSeconds)."
+          new_comment = "                // Runtime external sidecars are 0-based; align them to Aether's source-PTS overlay clock."
+          if old_comment not in text:
+              raise SystemExit("ERROR: runtime sidecar source-PTS comment not found")
+
+          text = text.replace(old_comment, new_comment, 1)
+          text = text.replace(needle, replacement, 1)
           target.write_text(text)
 
           if "let sidecarAxisShift = externalTrackID != nil ? self.playlistShiftSeconds : 0" not in text:
