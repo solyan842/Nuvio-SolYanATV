@@ -146,12 +146,12 @@ jobs:
 
           cd "$GITHUB_WORKSPACE/NuvioTVOS"
           echo ""
-          echo "Modified upstream files:"
+          echo "Modified upstream files after Details patch:"
           git status --short
 
           COUNT="$(git status --short | wc -l | tr -d ' ')"
           if [ "$COUNT" != "1" ]; then
-            echo "ERROR: Expected exactly one modified source file"
+            echo "ERROR: Expected exactly one modified source file after Details patch"
             exit 1
           fi
 
@@ -162,7 +162,78 @@ jobs:
             }
 
           echo ""
-          echo "SUCCESS: only DetailsScreen.swift modified in upstream checkout"
+          echo "SUCCESS: Details patch isolated"
+
+      - name: Align runtime external subtitles to source PTS
+        shell: bash
+        run: |
+          TARGET="$GITHUB_WORKSPACE/NuvioTVOS/Vendor/AetherEngine/Sources/AetherEngine/AetherEngine+Subtitles.swift"
+
+          test -f "$TARGET" || {
+            echo "ERROR: AetherEngine+Subtitles.swift not found"
+            exit 1
+          }
+
+          export TARGET
+          python3 <<'PY'
+          import os
+          from pathlib import Path
+
+          target = Path(os.environ["TARGET"])
+          text = target.read_text()
+
+          old = '''                // Sidecar cues are in source PTS; host renders against engine.sourceTime (which folds playlistShiftSeconds).
+                self.subtitleCues = result.cues
+'''
+          new = '''                // Runtime external sidecar files are authored on the item's 0-based timeline.
+                // The Aether overlay evaluates against sourceTime, which is on the source-PTS axis.
+                // Lift registered external sidecars onto that axis using the active playlist shift.
+                // Compatibility one-shot sidecars keep their historical behavior.
+                let sidecarAxisShift = externalTrackID != nil ? self.playlistShiftSeconds : 0
+                self.subtitleCues = result.cues.map { cue in
+                    SubtitleCue(
+                        id: cue.id,
+                        startTime: cue.startTime + sidecarAxisShift,
+                        endTime: cue.endTime + sidecarAxisShift,
+                        body: cue.body,
+                        placement: cue.placement
+                    )
+                }
+'''
+
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f"ERROR: expected exactly one runtime sidecar publish site, found {count}")
+
+          text = text.replace(old, new, 1)
+          target.write_text(text)
+
+          if "let sidecarAxisShift = externalTrackID != nil ? self.playlistShiftSeconds : 0" not in text:
+              raise SystemExit("ERROR: sidecar source-PTS alignment patch missing")
+          print("SUCCESS: runtime external sidecars aligned to Aether source PTS")
+          PY
+
+          cd "$GITHUB_WORKSPACE/NuvioTVOS"
+          echo ""
+          echo "Modified upstream files after subtitle patch:"
+          git status --short
+
+          COUNT="$(git status --short | wc -l | tr -d ' ')"
+          if [ "$COUNT" != "2" ]; then
+            echo "ERROR: Expected exactly two modified source files"
+            exit 1
+          fi
+
+          git status --short | grep -q "tvosApp/NuvioTV/Sources/UI/Details/DetailsScreen.swift" || {
+            echo "ERROR: DetailsScreen.swift patch missing"
+            exit 1
+          }
+          git status --short | grep -q "Vendor/AetherEngine/Sources/AetherEngine/AetherEngine+Subtitles.swift" || {
+            echo "ERROR: Aether subtitle patch missing"
+            exit 1
+          }
+
+          echo "SUCCESS: only DetailsScreen + Aether subtitle axis patch are modified"
 
       - name: Install Tuist
         shell: bash
@@ -193,7 +264,7 @@ jobs:
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Nuvio-SolYan-tvOS-NoBackdrop
+          name: Nuvio-SolYan-tvOS-NoBackdrop-SubtitlePTSFix
           path: NuvioTVOS/build-ipa/*.ipa
           if-no-files-found: error
           retention-days: 30
