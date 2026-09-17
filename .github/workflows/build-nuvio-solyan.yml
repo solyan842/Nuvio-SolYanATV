@@ -184,7 +184,7 @@ jobs:
 
           old = '''                // Sidecar cues are in source PTS; host renders against engine.sourceTime (which folds playlistShiftSeconds).
                 self.subtitleCues = result.cues
-'''
+          '''
           new = '''                // Runtime external sidecar files are authored on the item's 0-based timeline.
                 // The Aether overlay evaluates against sourceTime, which is on the source-PTS axis.
                 // Lift registered external sidecars onto that axis using the active playlist shift.
@@ -199,7 +199,7 @@ jobs:
                         placement: cue.placement
                     )
                 }
-'''
+          '''
 
           count = text.count(old)
           if count != 1:
